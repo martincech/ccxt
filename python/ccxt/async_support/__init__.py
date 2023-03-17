@@ -4,7 +4,7 @@
 
 # -----------------------------------------------------------------------------
 
-__version__ = '2.9.15'
+__version__ = '2.9.20'
 
 # -----------------------------------------------------------------------------
 
@@ -160,6 +160,7 @@ from ccxt.async_support.wavesexchange import wavesexchange                      
 from ccxt.async_support.wazirx import wazirx                                    # noqa: F401
 from ccxt.async_support.whitebit import whitebit                                # noqa: F401
 from ccxt.async_support.woo import woo                                          # noqa: F401
+from ccxt.xtrade_broker import xtb                                              # noqa: F401
 from ccxt.async_support.yobit import yobit                                      # noqa: F401
 from ccxt.async_support.zaif import zaif                                        # noqa: F401
 from ccxt.async_support.zb import zb                                            # noqa: F401
@@ -273,6 +274,7 @@ exchanges = [
     'wazirx',
     'whitebit',
     'woo',
+    'xtb',
     'yobit',
     'zaif',
     'zb',
