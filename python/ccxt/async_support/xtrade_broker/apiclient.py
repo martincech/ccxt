@@ -2,7 +2,7 @@ import datetime
 
 from ccxt import ExchangeError
 
-from ccxt.xtrade_broker.jsonsocket import JsonSocket, API_MAX_CONN_TRIES
+from ccxt.async_support.xtrade_broker.jsonsocket import JsonSocket, API_MAX_CONN_TRIES
 
 
 class APIClient(JsonSocket):

@@ -1,10 +1,10 @@
 import os
 from datetime import datetime
 
-from ccxt.xtrade_broker.apiclient import APIClient
-from ccxt.xtrade_broker.xtb_constants import order_type, order_side, taker_maker
+from ccxt.async_support.xtrade_broker.apiclient import APIClient
+from ccxt.async_support.xtrade_broker.xtb_constants import order_type, order_side, taker_maker
 
-from ccxt.async_support.base.exchange import Exchange
+from ccxt.async_support import Exchange
 
 
 class xtb(Exchange):
@@ -20,7 +20,7 @@ class xtb(Exchange):
         self._is_logged = False
 
     def describe(self):
-        return self.deep_extend(super(xtb, self).describe(), {
+        return {
             'id': 'xtb',
             'name': 'XTB',
             'countries': ['CZ'],
@@ -74,7 +74,7 @@ class xtb(Exchange):
                 'password': True,
             },
 
-        })
+        }
 
     def sign_in(self):
         if not self._is_logged:
@@ -103,14 +103,8 @@ class xtb(Exchange):
             }
         }
 
-    def fetch_balance(self, params={}):
-        return self._fetch_balance_impl(params)
-
     async def fetch_balance(self, params={}):
         return self._fetch_balance_impl(params)
-
-    def fetch_markets(self, params={}):
-        return self._fetch_markets_impl(params)
 
     def _fetch_markets_impl(self, params={}):
         self.sign_in()
@@ -122,30 +116,21 @@ class xtb(Exchange):
     async def fetch_markets(self, params={}):
         return self._fetch_markets_impl(params)
 
-    def fetch_time(self, params={}):
-        return self._client.getServerTime()['time']
+    async def fetch_time(self, params={}):
+        return self._fetch_time_impl(params)
 
-    def fetchTrades(self, symbol, since=None, limit=None, params={}):
-        return self._fetchTrades_impl(symbol, since, limit, params)
-
-    def _fetchTrades_impl(self, symbol, since=None, limit=None, params={}):
+    def _fetch_trades_impl(self, symbol, since=None, limit=None, params={}):
         trades = self._client.getTrades()
         return self.parse_trades(trades, self.market(symbol), since, limit, params)
 
-    async def fetchTrades(self, symbol, since=None, limit=None, params={}):
-        return self._fetchTrades_impl(symbol, since, limit, params)
-
-    def fetch_orders(self, symbol=None, since=None, limit=None, params={}):
-        return self._fetch_orders_impl(symbol, since, limit, params)
+    async def fetch_trades(self, symbol, since=None, limit=None, params={}):
+        return self._fetch_trades_impl(symbol, since, limit, params)
 
     def _fetch_orders_impl(self, symbol=None, since=None, limit=None, params={}):
-        return self.fetchTrades(symbol, since, limit, params)
+        return self.fetch_trades(symbol, since, limit, params)
 
     async def fetch_orders(self, symbol=None, since=None, limit=None, params={}):
         return self._fetch_orders_impl(symbol, since, limit, params)
-
-    def fetch_order(self, id, symbol=None, params={}):
-        return self._fetch_order_impl(id, symbol, params)
 
     def _fetch_order_impl(self, id, symbol=None, params={}):
         trades = self._client.getTradeRecords(order_id=id)
@@ -153,9 +138,6 @@ class xtb(Exchange):
 
     async def fetch_order(self, id, symbol=None, params={}):
         return self._fetch_order_impl(id, symbol, params)
-
-    def fetch_ohlcv(self, symbol, timeframe='1m', since=None, limit=None, params={}):
-        return self._fetch_ohlcv_impl(symbol, timeframe, since, limit, params)
 
     def _fetch_ohlcv_impl(self, symbol, timeframe='1m', since=None, limit=None, params={}):
         ret = self._client.getChartLastRequest(symbol, self.timeframes[timeframe], since)
@@ -218,10 +200,11 @@ class xtb(Exchange):
             },
         }
 
-    def _parse_ohlcv_data(self, candle, digits):
+    @staticmethod
+    def _parse_ohlcv_data(candle, digits):
         opn, high, low, close = [candle[what] for what in ['open', 'high', 'low', 'close']]
         high, low, close = [item + opn for item in [high, low, close]]
-        opn, high, low, close = [item / (10 ^ digits) for item in [opn, high, low, close]]
+        opn, high, low, close = [item / (10 ** digits) for item in [opn, high, low, close]]
 
         return [
             candle['ctm'],
@@ -254,3 +237,6 @@ class xtb(Exchange):
             'cost': None,
             'fee': None,
         }, market)
+
+    def _fetch_time_impl(self, params={}):
+        return self._client.getServerTime()['time']
