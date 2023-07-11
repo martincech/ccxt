@@ -22,8 +22,16 @@ class APIClient(JsonSocket):
         self.close()
 
     def _command_execute(self, commandName, arguments=None):
+        if arguments is not None:
+            log_args = arguments.copy()
+            if 'password' in arguments:
+                log_args['password'] = "*" * 5
+        else:
+            log_args = arguments
+        self._logger.debug(f"Executing {commandName} {log_args}")
         ret = self.execute(self._baseCommand(commandName, arguments))
         if not ret['status'] and 'errorCode' in ret:
+            self._logger.error(f"Error code {ret['errorCode']}: {ret['errorDescr']}")
             raise ExchangeError(ret['errorDescr'])
         if ret['status'] and 'returnData' in ret:
             return ret['returnData']
@@ -50,6 +58,9 @@ class APIClient(JsonSocket):
 
     def getAllSymbols(self):
         return self._command_execute('getAllSymbols')
+
+    def getSymbol(self, symbol: str):
+        return self._command_execute('getSymbol', {"symbol": symbol})
 
     def _convert_timestamp(self, ts):
         if ts is None:

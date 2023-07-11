@@ -44,6 +44,10 @@ class xtb(a_xtb):
         return self._fetch_trades_impl(symbol, since, limit, params)
 
     @force_sync
+    def fetch_my_trades(self, symbol, since=None, limit=None, params={}):
+        return self._fetch_trades_history_impl(symbol, since, limit, params)
+
+    @force_sync
     def fetch_orders(self, symbol=None, since=None, limit=None, params={}):
         return self._fetch_orders_impl(symbol, since, limit, params)
 

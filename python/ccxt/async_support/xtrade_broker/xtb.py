@@ -1,10 +1,23 @@
+import functools
 import os
 from datetime import datetime
+from typing import Optional, List
 
-from ccxt.async_support.xtrade_broker.apiclient import APIClient
-from ccxt.async_support.xtrade_broker.xtb_constants import order_type, order_side, taker_maker
-
+from ccxt import NotSupported
 from ccxt.async_support import Exchange
+from ccxt.async_support.xtrade_broker.apiclient import APIClient
+from ccxt.async_support.xtrade_broker.xtb_constants import order_type, order_side, taker_maker, OrderType
+from ccxt.base.types import OrderSide
+
+
+def signed(fn):
+    @functools.wraps(fn)
+    def wrapper(self, *args, **kwargs):
+        if not self.sign_in():
+            raise Exception('Login failed')
+        return fn(self, *args, **kwargs)
+
+    return wrapper
 
 
 class xtb(Exchange):
@@ -38,15 +51,19 @@ class xtb(Exchange):
                 'fetchBalance': True,
                 'fetchMarkets': True,
                 'fetchOHLCV': True,
+
                 'fetchOrder': True,
                 'fetchOrders': True,
                 'fetchClosedOrder': True,
-                'fetchTrades': True,
-                'fetchTime': True,
-                'cancelOrder': True,
-                'cancelOrders': True,
-                'createOrder': True,
+                'fetchOrderBook': True,
+                'fetchBidsAsks': True,
 
+                'fetchTrades': True,
+                'fetchMyTrades': True,
+                'fetchTime': True,
+
+                'cancelOrder': True,
+                'createOrder': True,
             },
             'timeframes': {
                 '1m': 1,
@@ -59,10 +76,11 @@ class xtb(Exchange):
                 '1w': 10080,
                 '1M': 43200,
             },
+            'timeout': 10000,
+            'rateLimit': 200,
             'hostname': 'xtb.com',
             'urls': {
                 'api': 'xapi.xtb.com:5124',
-                'test': 'xapi.xtb.com:5112',
                 'www': 'https://www.xtb.com/',
                 'doc': 'http://developers.xstore.pro/api'
             },
@@ -76,7 +94,7 @@ class xtb(Exchange):
 
         }
 
-    def sign_in(self):
+    def sign_in(self) -> bool:
         if not self._is_logged:
             if self._client is None:
                 self._client = APIClient(self.urls['api'])
@@ -84,8 +102,53 @@ class xtb(Exchange):
             self._is_logged = ret['status']
         return self._is_logged
 
+    async def fetch_balance(self, params={}):
+        return self._fetch_balance_impl(params)
+
+    async def fetch_markets(self, params={}):
+        return self._fetch_markets_impl(params)
+
+    async def fetch_ohlcv(self, symbol, timeframe='1m', since=None, limit=None, params={}):
+        return self._fetch_ohlcv_impl(symbol, timeframe, since, limit, params)
+
+    async def fetch_order(self, id, symbol=None, params={}):
+        return self._fetch_order_impl(id, symbol, params)
+
+    async def fetch_orders(self, symbol=None, since=None, limit=None, params={}):
+        return self._fetch_orders_impl(symbol, since, limit, params)
+
+    async def fetch_closed_orders(self, symbol: Optional[str] = None, since: Optional[int] = None,
+                                  limit: Optional[int] = None, params={}):
+        raise NotSupported(self.id + ' fetchClosedOrders() is not supported yet')
+
+    async def fetch_closed_orders(self, symbol: Optional[str] = None, since: Optional[int] = None,
+                                  limit: Optional[int] = None, params={}):
+        raise NotSupported(self.id + ' fetchClosedOrders() is not supported yet')
+
+    async def fetch_order_book(self, symbol: str, limit: Optional[int] = None, params={}):
+        raise NotSupported(self.id + ' fetchOrderBook() is not supported yet')
+
+    async def fetch_bids_asks(self, symbols: Optional[List[str]] = None, params={}):
+        raise NotSupported(self.id + ' fetchBidsAsks() is not supported yet')
+
+    async def fetch_trades(self, symbol, since=None, limit=None, params={}):
+        return self._fetch_trades_impl(symbol, since, limit, params)
+
+    async def fetch_my_trades(self, symbol: Optional[str] = None, since: Optional[int] = None,
+                              limit: Optional[int] = None, params={}):
+        return self._fetch_trades_history_impl(symbol, since, limit, params)
+
+    async def fetch_time(self, params={}):
+        return self._fetch_time_impl(params)
+
+    async def cancel_order(self, id: str, symbol: Optional[str] = None, params={}):
+        raise NotSupported(self.id + ' cancelOrder() is not supported yet')
+
+    async def create_order(self, symbol: str, type: OrderType, side: OrderSide, amount, price=None, params={}):
+        raise NotSupported(self.id + ' createOrder() is not supported yet')
+
+    @signed
     def _fetch_balance_impl(self, params={}):
-        self.sign_in()
         resp = self._client.getMarginLevelCommand()
         if not resp:
             return {}
@@ -103,62 +166,67 @@ class xtb(Exchange):
             }
         }
 
-    async def fetch_balance(self, params={}):
-        return self._fetch_balance_impl(params)
-
+    @signed
     def _fetch_markets_impl(self, params={}):
-        self.sign_in()
+        # symbols = [self._client.getSymbol(s) for s in ["NATGAS", "US500", "01C.PL"]]
         symbols = self._client.getAllSymbols()
         return [
             self._parse_market_info(symbol) for symbol in symbols
+            if symbol['categoryName'] not in ["ETF", "STC"]
         ]
 
-    async def fetch_markets(self, params={}):
-        return self._fetch_markets_impl(params)
-
-    async def fetch_time(self, params={}):
-        return self._fetch_time_impl(params)
-
+    @signed
     def _fetch_trades_impl(self, symbol, since=None, limit=None, params={}):
         trades = self._client.getTrades()
         return self.parse_trades(trades, self.market(symbol), since, limit, params)
 
-    async def fetch_trades(self, symbol, since=None, limit=None, params={}):
-        return self._fetch_trades_impl(symbol, since, limit, params)
+    @signed
+    def _fetch_trades_history_impl(self, symbol, since=None, limit=None, params={}):
+        trades = self._client.getTradesHistory()
+        return self.parse_trades(trades, self.market(symbol), since, limit, params)
 
+    @signed
     def _fetch_orders_impl(self, symbol=None, since=None, limit=None, params={}):
         return self.fetch_trades(symbol, since, limit, params)
 
-    async def fetch_orders(self, symbol=None, since=None, limit=None, params={}):
-        return self._fetch_orders_impl(symbol, since, limit, params)
-
+    @signed
     def _fetch_order_impl(self, id, symbol=None, params={}):
         trades = self._client.getTradeRecords(order_id=id)
         return self.parse_trades(trades, self.market(symbol), since=None, limit=None, params=params)
 
-    async def fetch_order(self, id, symbol=None, params={}):
-        return self._fetch_order_impl(id, symbol, params)
-
+    @signed
     def _fetch_ohlcv_impl(self, symbol, timeframe='1m', since=None, limit=None, params={}):
         ret = self._client.getChartLastRequest(symbol, self.timeframes[timeframe], since)
         candles = ret['rateInfos'] if limit is None else ret['rateInfos'][0:limit]
         return [self._parse_ohlcv_data(candle, ret['digits']) for candle in candles]
 
-    async def fetch_ohlcv(self, symbol, timeframe='1m', since=None, limit=None, params={}):
-        return self._fetch_ohlcv_impl(symbol, timeframe, since, limit, params)
+    @signed
+    def _fetch_time_impl(self, params={}):
+        return self._client.getServerTime()['time']
 
     def _parse_market_info(self, market: dict):
+        expiration_ts = self.safe_string(market, 'expiration')
+        margin = self.safe_integer(market, 'marginMode', 104) in [101, 102, 103]
+        swap = bool(self.safe_float(market, 'swapLong', 0) or self.safe_float(market, 'swapShort', 0))
+        future = expiration_ts is not None
+        if future:
+            typ = 'future'
+        elif swap:
+            typ = 'swap'
+        else:
+            typ = 'spot'
+        spot = typ == 'spot'
         return {
             'info': market,
             'id': self.safe_string(market, 'symbol'),
             'symbol': self.safe_string(market, 'symbol'),
             'base': self.safe_string(market, 'currency'),
             'quote': self.safe_string(market, 'currencyProfit'),
-            'type': 'spot',
-            'spot': True,
-            'margin': False,
-            'swap': False,
-            'future': False,
+            'type': typ,
+            'spot': spot,
+            'margin': margin,
+            'swap': swap,
+            'future': future,
             'option': False,
             'active': True,
             'contract': False,
@@ -166,8 +234,8 @@ class xtb(Exchange):
             'contractSize': None,
             'linear': True,
             'inverse': False,
-            'expiry': None,
-            'expiryDatetime': None,
+            'expiry': expiration_ts,
+            'expiryDatetime': self.iso8601(expiration_ts),
             'strike': None,
             'optionType': None,
             'taker': 0,
@@ -182,19 +250,19 @@ class xtb(Exchange):
             },
             'limits': {
                 'leverage': {
-                    'min': self.safe_float(market, 'leverage'),
-                    'max': self.safe_float(market, 'leverage'),
+                    'min': 100 / self.safe_float(market, 'leverage') if not spot else None,
+                    'max': 100 / self.safe_float(market, 'leverage') if not spot else None,
                 },
                 'amount': {
                     'min': self.safe_float(market, 'lotMin'),
                     'max': self.safe_float(market, 'lotMax'),
                 },
                 'price': {
-                    'min': self.safe_float(market, 'lotMin'),
+                    'min': None,
                     'max': None,
                 },
                 'cost': {
-                    'min': self.safe_float(market, 'minCost'),
+                    'min': None,
                     'max': None,
                 },
             },
@@ -237,6 +305,3 @@ class xtb(Exchange):
             'cost': None,
             'fee': None,
         }, market)
-
-    def _fetch_time_impl(self, params={}):
-        return self._client.getServerTime()['time']

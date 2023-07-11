@@ -51,7 +51,6 @@ class JsonSocket(object):
             msg = msg.encode('utf-8')
             while sent < len(msg):
                 sent += self.conn.send(msg[sent:])
-                # self._logger.debug('Sent: ' + str(msg))
                 time.sleep(API_SEND_TIMEOUT / 1000)
 
     def _read(self, bytesSize=4096):
@@ -70,7 +69,6 @@ class JsonSocket(object):
                     break
             except ValueError as e:
                 continue
-        self._logger.debug('Received: ' + str(resp))
         return resp
 
     def _readObj(self):
