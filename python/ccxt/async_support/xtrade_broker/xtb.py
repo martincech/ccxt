@@ -196,8 +196,8 @@ class xtb(Exchange):
 
     @signed
     def _fetch_ohlcv_impl(self, symbol, timeframe='1m', since=None, limit=None, params={}):
-        ret = self._client.getChartLastRequest(symbol, self.timeframes[timeframe], since)
-        candles = ret['rateInfos'] if limit is None else ret['rateInfos'][0:limit]
+        ret = self._client.getChartRangeRequest(symbol, self.timeframes[timeframe], since, limit=limit)
+        candles = ret['rateInfos']
         return [self._parse_ohlcv_data(candle, ret['digits']) for candle in candles]
 
     @signed

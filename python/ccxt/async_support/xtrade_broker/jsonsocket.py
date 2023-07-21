@@ -5,7 +5,7 @@ import ssl
 import time
 
 # API inter-command timeout (in ms)
-API_SEND_TIMEOUT = 100
+API_SEND_TIMEOUT = 205
 
 # max connection tries
 API_MAX_CONN_TRIES = 3
