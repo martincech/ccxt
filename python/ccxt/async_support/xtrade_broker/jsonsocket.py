@@ -1,8 +1,7 @@
+import asyncio
 import json
 import logging
-import socket
 import ssl
-import time
 
 # API inter-command timeout (in ms)
 API_SEND_TIMEOUT = 205
@@ -14,51 +13,65 @@ API_MAX_CONN_TRIES = 3
 class JsonSocket(object):
     def __init__(self, address: str, port: int, encrypt=False, conn_retries=API_MAX_CONN_TRIES,
                  logger=logging.getLogger(__name__)):
+        self.writer = None
+        self.reader = None
         self._logger = logger
         self._conn_retries = conn_retries
         self._ssl = encrypt
-        if not self._ssl:
-            self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        else:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.socket = ssl.wrap_socket(sock)
-        self.conn = self.socket
-        self._timeout = None
         self._address = address
         self._port = port
         self._decoder = json.JSONDecoder()
         self._receivedData = ''
+        self._is_connected = False
 
-    def connect(self):
-        for i in range(self._conn_retries):
-            try:
-                self.socket.connect((self.address, self.port))
-            except socket.error as msg:
-                self._logger.error("SockThread Error: %s" % msg)
-                time.sleep(0.25)
-                continue
-            self._logger.info("Socket connected")
-            return True
-        return False
+    def __del__(self):
+        self.disconnect()
 
-    def _sendObj(self, obj):
+    async def connect(self):
+        if not self._is_connected:
+            for i in range(self._conn_retries):
+                try:
+                    if not self._ssl:
+                        self.reader, self.writer = await asyncio.open_connection(self._address, self._port)
+                    else:
+                        ssl_context = ssl.create_default_context()
+                        self.reader, self.writer = await asyncio.open_connection(self._address, self._port,
+                                                                                 ssl=ssl_context)
+                except (OSError, asyncio.TimeoutError) as msg:
+                    self._logger.error("SockThread Error: %s" % msg)
+                    await asyncio.sleep(0.25)
+                    continue
+                self._logger.debug("Socket connected")
+                self._is_connected = True
+                break
+            if not self._is_connected:
+                raise Exception(f"Cannot connect to {self._address}:{self._port} after {self._conn_retries} retries")
+        return self._is_connected
+
+    async def _sendObj(self, obj):
         msg = json.dumps(obj)
-        self._waitingSend(msg)
+        await self._waitingSend(msg)
 
-    def _waitingSend(self, msg):
-        if self.socket:
-            sent = 0
+    async def _waitingSend(self, msg):
+        if self.writer:
             msg = msg.encode('utf-8')
-            while sent < len(msg):
-                sent += self.conn.send(msg[sent:])
-                time.sleep(API_SEND_TIMEOUT / 1000)
+            try:
+                self.writer.write(msg)
+                await self.writer.drain()
+                await asyncio.sleep(API_SEND_TIMEOUT / 1000)
+            except (OSError, asyncio.TimeoutError):
+                self.disconnect()
+                raise BrokenPipeError("socket connection broken")
 
-    def _read(self, bytesSize=4096):
-        if not self.socket:
-            raise RuntimeError("socket connection broken")
+    async def _read(self, bytesSize=4096):
+        if not self.reader:
+            self.disconnect()
+            raise BrokenPipeError("socket connection broken")
         while True:
-            char = self.conn.recv(bytesSize).decode()
-            self._receivedData += char
+            char = await self.reader.read(bytesSize)
+            if not char:
+                break
+            self._receivedData += char.decode()
             try:
                 (resp, size) = self._decoder.raw_decode(self._receivedData)
                 if size == len(self._receivedData):
@@ -71,49 +84,34 @@ class JsonSocket(object):
                 continue
         return resp
 
-    def _readObj(self):
-        msg = self._read()
-        return msg
+    async def _readObj(self):
+        return await self._read()
 
-    def close(self):
+    def disconnect(self):
         self._logger.debug("Closing socket")
-        self._closeSocket()
-        if self.socket is not self.conn:
-            self._logger.debug("Closing connection socket")
-            self._closeConnection()
+        self._is_connected = False
+        if self.writer:
+            self.writer.close()
+            self.writer = None
+        if self.reader:
+            self.reader = None
 
-    def _closeSocket(self):
-        self.socket.close()
+    @property
+    def timeout(self):
+        return self.writer.get_extra_info('socket').gettimeout()
 
-    def _closeConnection(self):
-        self.conn.close()
+    @timeout.setter
+    def timeout(self, value):
+        self.writer.get_extra_info('socket').settimeout(value)
 
-    def _get_timeout(self):
-        return self._timeout
-
-    def _set_timeout(self, timeout):
-        self._timeout = timeout
-        self.socket.settimeout(timeout)
-
-    def _get_address(self):
+    @property
+    def address(self):
         return self._address
 
-    def _set_address(self, address):
-        pass
-
-    def _get_port(self):
+    @property
+    def port(self):
         return self._port
 
-    def _set_port(self, port):
-        pass
-
-    def _get_encrypt(self):
+    @property
+    def encrypt(self):
         return self._ssl
-
-    def _set_encrypt(self, encrypt):
-        pass
-
-    timeout = property(_get_timeout, _set_timeout, doc='Get/set the socket timeout')
-    address = property(_get_address, _set_address, doc='read only property socket address')
-    port = property(_get_port, _set_port, doc='read only property socket port')
-    encrypt = property(_get_encrypt, _set_encrypt, doc='read only property socket port')

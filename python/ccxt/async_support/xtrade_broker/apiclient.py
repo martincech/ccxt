@@ -10,18 +10,14 @@ class APIClient(JsonSocket):
         self._session_id = None
         address, port = url.split(":")
         super(APIClient, self).__init__(address, int(port), encrypt, conn_retries=conn_retries)
-        if (not self.connect()):
-            raise Exception(
-                "Cannot connect to " + address + ":" + str(port) + " after " + str(conn_retries) + " retries")
+        self._is_logged = False
 
-    def execute(self, dictionary):
-        self._sendObj(dictionary)
-        return self._readObj()
+    async def execute(self, dictionary):
+        await self._sendObj(dictionary)
+        return await self._readObj()
 
-    def disconnect(self):
-        self.close()
-
-    def _command_execute(self, commandName, arguments=None):
+    async def _command_execute(self, commandName, arguments=None):
+        await self.connect()
         if arguments is not None:
             log_args = arguments.copy()
             if 'password' in arguments:
@@ -29,14 +25,18 @@ class APIClient(JsonSocket):
         else:
             log_args = arguments
         self._logger.debug(f"Executing {commandName} {log_args}")
-        ret = self.execute(self._baseCommand(commandName, arguments))
-        if not ret['status'] and 'errorCode' in ret:
-            self._logger.error(f"Error code {ret['errorCode']}: {ret['errorDescr']}")
-            self._raise_by_errorcode(ret['errorCode'], ret['errorDescr'])
-        if ret['status'] and 'returnData' in ret:
-            return ret['returnData']
-        else:
-            return ret
+        try:
+            ret = await self.execute(self._baseCommand(commandName, arguments))
+            if not ret['status'] and 'errorCode' in ret:
+                self._logger.error(f"Error code {ret['errorCode']}: {ret['errorDescr']}")
+                self._raise_by_errorcode(ret['errorCode'], ret['errorDescr'])
+            if ret['status'] and 'returnData' in ret:
+                return ret['returnData']
+            else:
+                return ret
+        except Exception as e:
+            self._logger.error(f"Error executing {commandName}: {e}")
+            return None
 
     @staticmethod
     def _raise_by_errorcode(errcode, description):
@@ -65,23 +65,28 @@ class APIClient(JsonSocket):
             arguments = dict()
         return dict([('command', commandName), ('arguments', arguments)])
 
-    def loginCommand(self, userId, password, appName=''):
-        resp = self._command_execute('login', dict(userId=userId, password=password, appName=appName))
+    async def loginCommand(self, userId, password, appName='') -> bool:
+        if self._is_logged:
+            return True
+        resp = await self._command_execute('login', dict(userId=userId, password=password, appName=appName))
         if resp['status']:
             self._session_id = resp['streamSessionId']
-        return resp
+            self._is_logged = True
+        else:
+            self._is_logged = False
+        return self._is_logged
 
-    def getCurrentUserDataCommand(self):
-        return self._command_execute('getCurrentUserData')
+    async def getCurrentUserDataCommand(self):
+        return await self._command_execute('getCurrentUserData')
 
-    def getMarginLevelCommand(self):
-        return self._command_execute('getMarginLevel')
+    async def getMarginLevelCommand(self):
+        return await self._command_execute('getMarginLevel')
 
-    def getAllSymbols(self):
-        return self._command_execute('getAllSymbols')
+    async def getAllSymbols(self):
+        return await self._command_execute('getAllSymbols')
 
-    def getSymbol(self, symbol: str):
-        return self._command_execute('getSymbol', {"symbol": symbol})
+    async def getSymbol(self, symbol: str):
+        return await self._command_execute('getSymbol', {"symbol": symbol})
 
     def _convert_timestamp(self, ts):
         if ts is None:
@@ -94,18 +99,7 @@ class APIClient(JsonSocket):
 
         return convert_float_to_int(ts)
 
-    def getChartRangeRequest(self, symbol, timeframe=15, since=None):
-        since = self._convert_timestamp(since)
-        arguments = {
-            "info": {
-                "period": timeframe,
-                "start": int(since),
-                "symbol": symbol
-            }
-        }
-        return self._command_execute('getChartLastRequest', arguments)
-
-    def getChartRangeRequest(self, symbol, timeframe=15, since=None, until=None, limit=None):
+    async def getChartRangeRequest(self, symbol, timeframe=15, since=None, until=None, limit=None):
         since = self._convert_timestamp(since)
         until = self._convert_timestamp(until)
         arguments = {
@@ -117,9 +111,9 @@ class APIClient(JsonSocket):
                 "end": int(until)
             }
         }
-        return self._command_execute('getChartRangeRequest', arguments)
+        return await self._command_execute('getChartRangeRequest', arguments)
 
-    def getChartLastRequest(self, symbol, timeframe=15, since=None):
+    async def getChartLastRequest(self, symbol, timeframe=15, since=None):
         since = self._convert_timestamp(since)
         arguments = {
             "info": {
@@ -128,22 +122,22 @@ class APIClient(JsonSocket):
                 "symbol": symbol
             }
         }
-        return self._command_execute('getChartLastRequest', arguments)
+        return await self._command_execute('getChartLastRequest', arguments)
 
-    def getServerTime(self):
-        return self._command_execute('getServerTime')
+    async def getServerTime(self):
+        return await self._command_execute('getServerTime')
 
-    def getTrades(self):
-        return self._command_execute('getTrades', {"openedOnly": True})
+    async def getTrades(self):
+        return await self._command_execute('getTrades', {"openedOnly": True})
 
-    def getTradeRecords(self, order_id):
-        return self._command_execute('getTradeRecords', {"orders": [
+    async def getTradeRecords(self, order_id):
+        return await self._command_execute('getTradeRecords', {"orders": [
             order_id
         ]})
 
-    def getTradesHistory(self, since=None, until=0):
+    async def getTradesHistory(self, since=None, until=0):
         since = self._convert_timestamp(since)
-        return self._command_execute('getTradesHistory', {
+        return await self._command_execute('getTradesHistory', {
             "start": int(since),
             "end": until
         })
