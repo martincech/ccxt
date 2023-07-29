@@ -45,7 +45,7 @@ class bybit(Exchange, ImplicitAPI):
                 'margin': True,
                 'swap': True,
                 'future': True,
-                'option': None,
+                'option': True,
                 'cancelAllOrders': True,
                 'cancelOrder': True,
                 'createOrder': True,
@@ -91,6 +91,7 @@ class bybit(Exchange, ImplicitAPI):
                 'fetchPosition': True,
                 'fetchPositions': True,
                 'fetchPremiumIndexOHLCV': True,
+                'fetchSettlementHistory': True,
                 'fetchTicker': True,
                 'fetchTickers': True,
                 'fetchTime': True,
@@ -1778,8 +1779,8 @@ class bybit(Exchange, ImplicitAPI):
                     'option': True,
                     'active': isActive,
                     'contract': True,
-                    'linear': True,
-                    'inverse': False,
+                    'linear': None,
+                    'inverse': None,
                     'taker': self.safe_number(market, 'takerFee', self.parse_number('0.0006')),
                     'maker': self.safe_number(market, 'makerFee', self.parse_number('0.0001')),
                     'contractSize': self.safe_number(lotSizeFilter, 'minOrderQty'),
@@ -3161,13 +3162,13 @@ class bybit(Exchange, ImplicitAPI):
             'PENDING_CANCEL': 'open',
             'PENDING_NEW': 'open',
             'REJECTED': 'rejected',
-            'PARTIALLY_FILLED_CANCELLED': 'canceled',
+            'PARTIALLY_FILLED_CANCELLED': 'closed',  # context: https://github.com/ccxt/ccxt/issues/18685
             # v3 contract / unified margin / unified account
             'Created': 'open',
             'New': 'open',
             'Rejected': 'rejected',  # order is triggered but failed upon being placed
             'PartiallyFilled': 'open',
-            'PartiallyFilledCanceled': 'canceled',
+            'PartiallyFilledCanceled': 'closed',  # context: https://github.com/ccxt/ccxt/issues/18685
             'Filled': 'closed',
             'PendingCancel': 'open',
             'Cancelled': 'canceled',
@@ -3516,7 +3517,7 @@ class bybit(Exchange, ImplicitAPI):
             #  closeOnTrigger to avoid failing due to insufficient available margin
             # 'closeOnTrigger': False, required for linear orders
             # 'orderLinkId': 'string',  # unique client order id, max 36 characters
-            # 'triggerPrice': 123.45,  # trigger price, required for conditional orders
+            # 'triggerPrice': 123.46,  # trigger price, required for conditional orders
             # 'triggerBy': 'MarkPrice',  # IndexPrice, MarkPrice, LastPrice
             # 'tpTriggerby': 'MarkPrice',  # IndexPrice, MarkPrice, LastPrice
             # 'slTriggerBy': 'MarkPrice',  # IndexPrice, MarkPrice, LastPrice
@@ -3531,10 +3532,10 @@ class bybit(Exchange, ImplicitAPI):
         }
         if market['spot']:
             request['category'] = 'spot'
-        elif market['linear']:
-            request['category'] = 'linear'
         elif market['option']:
             request['category'] = 'option'
+        elif market['linear']:
+            request['category'] = 'linear'
         else:
             raise NotSupported(self.id + ' createOrder does not allow inverse market orders for ' + symbol + ' markets')
         if market['spot'] and (type == 'market') and (side == 'buy'):
@@ -3634,16 +3635,18 @@ class bybit(Exchange, ImplicitAPI):
         if (type == 'market') and (side == 'buy'):
             # for market buy it requires the amount of quote currency to spend
             if self.options['createMarketBuyOrderRequiresPrice']:
-                cost = self.safe_number(params, 'cost')
-                params = self.omit(params, 'cost')
-                if price is None and cost is None:
-                    raise InvalidOrder(self.id + " createOrder() requires the price argument with market buy orders to calculate total order cost(amount to spend), where cost = amount * price. Supply a price argument to createOrder() call if you want the cost to be calculated for you from price and amount, or, alternatively, add .options['createMarketBuyOrderRequiresPrice'] = False to supply the cost in the amount argument(the exchange-specific behaviour)")
-                else:
+                cost = self.safe_number_2(params, 'cost', 'orderQty')
+                params = self.omit(params, ['cost', 'orderQty'])
+                if cost is not None:
+                    request['orderQty'] = self.cost_to_precision(symbol, cost)
+                elif price is not None:
                     amountString = self.number_to_string(amount)
                     priceString = self.number_to_string(price)
-                    quoteAmount = Precise.string_mul(amountString, priceString)
-                    amount = cost if (cost is not None) else self.parse_number(quoteAmount)
-                    request['orderQty'] = self.cost_to_precision(symbol, amount)
+                    costString = Precise.string_mul(amountString, priceString)
+                    cost = self.parse_number(costString)
+                    request['orderQty'] = self.cost_to_precision(symbol, cost)
+                else:
+                    raise InvalidOrder(self.id + " createOrder() requires the price argument with market buy orders to calculate total order cost(amount to spend), where cost = amount * price. Supply a price argument to createOrder() call if you want the cost to be calculated for you from price and amount, or, alternatively, add .options['createMarketBuyOrderRequiresPrice'] = False to supply the cost in the amount argument(the exchange-specific behaviour)")
             else:
                 request['orderQty'] = self.cost_to_precision(symbol, amount)
         else:
@@ -4012,10 +4015,10 @@ class bybit(Exchange, ImplicitAPI):
             # Valid for option only.
             # 'orderIv': '0',  # Implied volatility; parameters are passed according to the real value; for example, for 10%, 0.1 is passed
         }
-        if market['linear']:
-            request['category'] = 'linear'
-        else:
+        if market['option']:
             request['category'] = 'option'
+        elif market['linear']:
+            request['category'] = 'linear'
         if price is not None:
             request['price'] = self.price_to_precision(symbol, price)
         triggerPrice = self.safe_number_2(params, 'triggerPrice', 'stopPrice')
@@ -6643,7 +6646,7 @@ class bybit(Exchange, ImplicitAPI):
         result = self.safe_value(response, 'result', {})
         positions = self.safe_value_2(result, 'list', 'dataList', [])
         timestamp = self.safe_integer(response, 'time')
-        first = self.safe_value(positions, 0)
+        first = self.safe_value(positions, 0, {})
         position = self.parse_position(first, market)
         return self.extend(position, {
             'timestamp': timestamp,
@@ -8069,6 +8072,91 @@ class bybit(Exchange, ImplicitAPI):
         data = self.safe_value(response, 'result', {})
         rows = self.safe_value(data, 'rows', [])
         return self.parse_deposit_withdraw_fees(rows, codes, 'coin')
+
+    def fetch_settlement_history(self, symbol: Optional[str] = None, since: Optional[int] = None, limit: Optional[int] = None, params={}):
+        """
+        fetches historical settlement records
+        see https://bybit-exchange.github.io/docs/v5/market/delivery-price
+        :param str symbol: unified market symbol of the settlement history
+        :param int [since]: timestamp in ms
+        :param int [limit]: number of records
+        :param dict [params]: exchange specific params
+        :returns dict[]: a list of [settlement history objects]
+        """
+        self.load_markets()
+        request = {}
+        market = None
+        if symbol is not None:
+            market = self.market(symbol)
+            request['symbol'] = market['id']
+        type = None
+        type, params = self.handle_market_type_and_params('fetchSettlementHistory', market, params)
+        if type == 'option':
+            request['category'] = 'option'
+        else:
+            subType = None
+            subType, params = self.handle_sub_type_and_params('fetchSettlementHistory', market, params, 'linear')
+            request['category'] = subType
+        if limit is not None:
+            request['limit'] = limit
+        response = self.publicGetV5MarketDeliveryPrice(self.extend(request, params))
+        #
+        #     {
+        #         "retCode": 0,
+        #         "retMsg": "success",
+        #         "result": {
+        #             "category": "option",
+        #             "nextPageCursor": "0%2C3",
+        #             "list": [
+        #                 {
+        #                     "symbol": "SOL-27JUN23-20-C",
+        #                     "deliveryPrice": "16.62258889",
+        #                     "deliveryTime": "1687852800000"
+        #                 },
+        #             ]
+        #         },
+        #         "retExtInfo": {},
+        #         "time": 1689043527231
+        #     }
+        #
+        result = self.safe_value(response, 'result', {})
+        data = self.safe_value(result, 'list', [])
+        settlements = self.parse_settlements(data, market)
+        sorted = self.sort_by(settlements, 'timestamp')
+        return self.filter_by_symbol_since_limit(sorted, symbol, since, limit)
+
+    def parse_settlement(self, settlement, market):
+        #
+        #     {
+        #         "symbol": "SOL-27JUN23-20-C",
+        #         "deliveryPrice": "16.62258889",
+        #         "deliveryTime": "1687852800000"
+        #     }
+        #
+        timestamp = self.safe_integer(settlement, 'deliveryTime')
+        marketId = self.safe_string(settlement, 'symbol')
+        return {
+            'info': settlement,
+            'symbol': self.safe_symbol(marketId, market),
+            'price': self.safe_number(settlement, 'deliveryPrice'),
+            'timestamp': timestamp,
+            'datetime': self.iso8601(timestamp),
+        }
+
+    def parse_settlements(self, settlements, market):
+        #
+        #     [
+        #         {
+        #             "symbol": "SOL-27JUN23-20-C",
+        #             "deliveryPrice": "16.62258889",
+        #             "deliveryTime": "1687852800000"
+        #         }
+        #     ]
+        #
+        result = []
+        for i in range(0, len(settlements)):
+            result.append(self.parse_settlement(settlements[i], market))
+        return result
 
     def sign(self, path, api='public', method='GET', params={}, headers=None, body=None):
         url = self.implode_hostname(self.urls['api'][api]) + '/' + path

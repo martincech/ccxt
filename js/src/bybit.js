@@ -34,7 +34,7 @@ export default class bybit extends Exchange {
                 'margin': true,
                 'swap': true,
                 'future': true,
-                'option': undefined,
+                'option': true,
                 'cancelAllOrders': true,
                 'cancelOrder': true,
                 'createOrder': true,
@@ -80,6 +80,7 @@ export default class bybit extends Exchange {
                 'fetchPosition': true,
                 'fetchPositions': true,
                 'fetchPremiumIndexOHLCV': true,
+                'fetchSettlementHistory': true,
                 'fetchTicker': true,
                 'fetchTickers': true,
                 'fetchTime': true,
@@ -1800,8 +1801,8 @@ export default class bybit extends Exchange {
                     'option': true,
                     'active': isActive,
                     'contract': true,
-                    'linear': true,
-                    'inverse': false,
+                    'linear': undefined,
+                    'inverse': undefined,
                     'taker': this.safeNumber(market, 'takerFee', this.parseNumber('0.0006')),
                     'maker': this.safeNumber(market, 'makerFee', this.parseNumber('0.0001')),
                     'contractSize': this.safeNumber(lotSizeFilter, 'minOrderQty'),
@@ -3289,13 +3290,13 @@ export default class bybit extends Exchange {
             'PENDING_CANCEL': 'open',
             'PENDING_NEW': 'open',
             'REJECTED': 'rejected',
-            'PARTIALLY_FILLED_CANCELLED': 'canceled',
+            'PARTIALLY_FILLED_CANCELLED': 'closed',
             // v3 contract / unified margin / unified account
             'Created': 'open',
             'New': 'open',
             'Rejected': 'rejected',
             'PartiallyFilled': 'open',
-            'PartiallyFilledCanceled': 'canceled',
+            'PartiallyFilledCanceled': 'closed',
             'Filled': 'closed',
             'PendingCancel': 'open',
             'Cancelled': 'canceled',
@@ -3671,7 +3672,7 @@ export default class bybit extends Exchange {
             //  closeOnTrigger to avoid failing due to insufficient available margin
             // 'closeOnTrigger': false, required for linear orders
             // 'orderLinkId': 'string', // unique client order id, max 36 characters
-            // 'triggerPrice': 123.45, // trigger price, required for conditional orders
+            // 'triggerPrice': 123.46, // trigger price, required for conditional orders
             // 'triggerBy': 'MarkPrice', // IndexPrice, MarkPrice, LastPrice
             // 'tpTriggerby': 'MarkPrice', // IndexPrice, MarkPrice, LastPrice
             // 'slTriggerBy': 'MarkPrice', // IndexPrice, MarkPrice, LastPrice
@@ -3687,11 +3688,11 @@ export default class bybit extends Exchange {
         if (market['spot']) {
             request['category'] = 'spot';
         }
-        else if (market['linear']) {
-            request['category'] = 'linear';
-        }
         else if (market['option']) {
             request['category'] = 'option';
+        }
+        else if (market['linear']) {
+            request['category'] = 'linear';
         }
         else {
             throw new NotSupported(this.id + ' createOrder does not allow inverse market orders for ' + symbol + ' markets');
@@ -3813,17 +3814,20 @@ export default class bybit extends Exchange {
         if ((type === 'market') && (side === 'buy')) {
             // for market buy it requires the amount of quote currency to spend
             if (this.options['createMarketBuyOrderRequiresPrice']) {
-                const cost = this.safeNumber(params, 'cost');
-                params = this.omit(params, 'cost');
-                if (price === undefined && cost === undefined) {
-                    throw new InvalidOrder(this.id + " createOrder() requires the price argument with market buy orders to calculate total order cost (amount to spend), where cost = amount * price. Supply a price argument to createOrder() call if you want the cost to be calculated for you from price and amount, or, alternatively, add .options['createMarketBuyOrderRequiresPrice'] = false to supply the cost in the amount argument (the exchange-specific behaviour)");
+                let cost = this.safeNumber2(params, 'cost', 'orderQty');
+                params = this.omit(params, ['cost', 'orderQty']);
+                if (cost !== undefined) {
+                    request['orderQty'] = this.costToPrecision(symbol, cost);
                 }
-                else {
+                else if (price !== undefined) {
                     const amountString = this.numberToString(amount);
                     const priceString = this.numberToString(price);
-                    const quoteAmount = Precise.stringMul(amountString, priceString);
-                    amount = (cost !== undefined) ? cost : this.parseNumber(quoteAmount);
-                    request['orderQty'] = this.costToPrecision(symbol, amount);
+                    const costString = Precise.stringMul(amountString, priceString);
+                    cost = this.parseNumber(costString);
+                    request['orderQty'] = this.costToPrecision(symbol, cost);
+                }
+                else {
+                    throw new InvalidOrder(this.id + " createOrder() requires the price argument with market buy orders to calculate total order cost (amount to spend), where cost = amount * price. Supply a price argument to createOrder() call if you want the cost to be calculated for you from price and amount, or, alternatively, add .options['createMarketBuyOrderRequiresPrice'] = false to supply the cost in the amount argument (the exchange-specific behaviour)");
                 }
             }
             else {
@@ -4249,11 +4253,11 @@ export default class bybit extends Exchange {
             // Valid for option only.
             // 'orderIv': '0', // Implied volatility; parameters are passed according to the real value; for example, for 10%, 0.1 is passed
         };
-        if (market['linear']) {
-            request['category'] = 'linear';
-        }
-        else {
+        if (market['option']) {
             request['category'] = 'option';
+        }
+        else if (market['linear']) {
+            request['category'] = 'linear';
         }
         if (price !== undefined) {
             request['price'] = this.priceToPrecision(symbol, price);
@@ -7146,7 +7150,7 @@ export default class bybit extends Exchange {
         const result = this.safeValue(response, 'result', {});
         const positions = this.safeValue2(result, 'list', 'dataList', []);
         const timestamp = this.safeInteger(response, 'time');
-        const first = this.safeValue(positions, 0);
+        const first = this.safeValue(positions, 0, {});
         const position = this.parsePosition(first, market);
         return this.extend(position, {
             'timestamp': timestamp,
@@ -8694,6 +8698,98 @@ export default class bybit extends Exchange {
         const data = this.safeValue(response, 'result', {});
         const rows = this.safeValue(data, 'rows', []);
         return this.parseDepositWithdrawFees(rows, codes, 'coin');
+    }
+    async fetchSettlementHistory(symbol = undefined, since = undefined, limit = undefined, params = {}) {
+        /**
+         * @method
+         * @name bybit#fetchSettlementHistory
+         * @description fetches historical settlement records
+         * @see https://bybit-exchange.github.io/docs/v5/market/delivery-price
+         * @param {string} symbol unified market symbol of the settlement history
+         * @param {int} [since] timestamp in ms
+         * @param {int} [limit] number of records
+         * @param {object} [params] exchange specific params
+         * @returns {object[]} a list of [settlement history objects]
+         */
+        await this.loadMarkets();
+        const request = {};
+        let market = undefined;
+        if (symbol !== undefined) {
+            market = this.market(symbol);
+            request['symbol'] = market['id'];
+        }
+        let type = undefined;
+        [type, params] = this.handleMarketTypeAndParams('fetchSettlementHistory', market, params);
+        if (type === 'option') {
+            request['category'] = 'option';
+        }
+        else {
+            let subType = undefined;
+            [subType, params] = this.handleSubTypeAndParams('fetchSettlementHistory', market, params, 'linear');
+            request['category'] = subType;
+        }
+        if (limit !== undefined) {
+            request['limit'] = limit;
+        }
+        const response = await this.publicGetV5MarketDeliveryPrice(this.extend(request, params));
+        //
+        //     {
+        //         "retCode": 0,
+        //         "retMsg": "success",
+        //         "result": {
+        //             "category": "option",
+        //             "nextPageCursor": "0%2C3",
+        //             "list": [
+        //                 {
+        //                     "symbol": "SOL-27JUN23-20-C",
+        //                     "deliveryPrice": "16.62258889",
+        //                     "deliveryTime": "1687852800000"
+        //                 },
+        //             ]
+        //         },
+        //         "retExtInfo": {},
+        //         "time": 1689043527231
+        //     }
+        //
+        const result = this.safeValue(response, 'result', {});
+        const data = this.safeValue(result, 'list', []);
+        const settlements = this.parseSettlements(data, market);
+        const sorted = this.sortBy(settlements, 'timestamp');
+        return this.filterBySymbolSinceLimit(sorted, symbol, since, limit);
+    }
+    parseSettlement(settlement, market) {
+        //
+        //     {
+        //         "symbol": "SOL-27JUN23-20-C",
+        //         "deliveryPrice": "16.62258889",
+        //         "deliveryTime": "1687852800000"
+        //     }
+        //
+        const timestamp = this.safeInteger(settlement, 'deliveryTime');
+        const marketId = this.safeString(settlement, 'symbol');
+        return {
+            'info': settlement,
+            'symbol': this.safeSymbol(marketId, market),
+            'price': this.safeNumber(settlement, 'deliveryPrice'),
+            'timestamp': timestamp,
+            'datetime': this.iso8601(timestamp),
+        };
+    }
+    parseSettlements(settlements, market) {
+        //
+        //     [
+        //         {
+        //             "symbol": "SOL-27JUN23-20-C",
+        //             "deliveryPrice": "16.62258889",
+        //             "deliveryTime": "1687852800000"
+        //         }
+        //     ]
+        //
+        const result = [];
+        for (let i = 0; i < settlements.length; i++) {
+            result.push(this.parseSettlement(settlements[i], market));
+        }
+        return result;
     }
     sign(path, api = 'public', method = 'GET', params = {}, headers = undefined, body = undefined) {
         let url = this.implodeHostname(this.urls['api'][api]) + '/' + path;

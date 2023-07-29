@@ -65,7 +65,7 @@ class deribit(ccxt.async_support.deribit):
     async def watch_balance(self, params={}):
         """
         see https://docs.deribit.com/#user-portfolio-currency
-        query for balance and get the amount of funds available for trading or funds locked in orders
+        watch balance and get the amount of funds available for trading or funds locked in orders
         :param dict [params]: extra parameters specific to the deribit api endpoint
         :returns dict: a `balance structure <https://docs.ccxt.com/en/latest/manual.html?#balance-structure>`
         """
@@ -566,8 +566,9 @@ class deribit(ccxt.async_support.deribit):
         else:
             order = self.parse_order(data)
             orders = [order]
+        cachedOrders = self.orders
         for i in range(0, len(orders)):
-            self.orders.append(orders[i])
+            cachedOrders.append(orders[i])
         client.resolve(self.orders, channel)
 
     async def watch_ohlcv(self, symbol: str, timeframe='1m', since: Optional[int] = None, limit: Optional[int] = None, params={}):

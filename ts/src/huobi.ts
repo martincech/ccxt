@@ -599,6 +599,7 @@ export default class huobi extends Exchange {
                             // Swap Account Interface
                             'linear-swap-api/v1/swap_api_trading_status': 1,
                             'linear-swap-api/v3/unified_account_info': 1,
+                            'linear-swap-api/v3/fix_position_margin_change_record': 1,
                             'linear-swap-api/v3/swap_unified_account_type': 1,
                         },
                         'post': {
@@ -792,6 +793,7 @@ export default class huobi extends Exchange {
                             'linear-swap-api/v3/swap_cross_hisorders': 1,
                             'linear-swap-api/v3/swap_hisorders_exact': 1,
                             'linear-swap-api/v3/swap_cross_hisorders_exact': 1,
+                            'linear-swap-api/v3/fix_position_margin_change': 1,
                             'linear-swap-api/v3/swap_switch_account_type': 1,
                             // Swap Strategy Order Interface
                             'linear-swap-api/v1/swap_trigger_order': 1,
@@ -843,6 +845,7 @@ export default class huobi extends Exchange {
                 'broad': {
                     'contract is restricted of closing positions on API.  Please contact customer service': OnMaintenance,
                     'maintain': OnMaintenance,
+                    'API key has no permission': PermissionDenied, // {"status":"error","err-code":"api-signature-not-valid","err-msg":"Signature not valid: API key has no permission [API Key没有权限]","data":null}
                 },
                 'exact': {
                     // err-code
@@ -2323,12 +2326,10 @@ export default class huobi extends Exchange {
         }
         let marketType = undefined;
         [ marketType, params ] = this.handleMarketTypeAndParams ('fetchOrderTrades', market, params);
-        const method = this.getSupportedMapping (marketType, {
-            'spot': 'fetchSpotOrderTrades',
-            // 'swap': 'fetchContractOrderTrades',
-            // 'future': 'fetchContractOrderTrades',
-        });
-        return await this[method] (id, symbol, since, limit, params);
+        if (marketType !== 'spot') {
+            throw new NotSupported (this.id + ' fetchOrderTrades() is only supported for spot markets');
+        }
+        return await this.fetchSpotOrderTrades (id, symbol, since, limit, params);
     }
 
     async fetchSpotOrderTrades (id: string, symbol: string = undefined, since: Int = undefined, limit: Int = undefined, params = {}) {
@@ -3809,19 +3810,17 @@ export default class huobi extends Exchange {
         }
         let marketType = undefined;
         [ marketType, params ] = this.handleMarketTypeAndParams ('fetchOrders', market, params);
-        const method = this.getSupportedMapping (marketType, {
-            'spot': 'fetchSpotOrders',
-            'swap': 'fetchContractOrders',
-            'future': 'fetchContractOrders',
-        });
-        if (method === undefined) {
-            throw new NotSupported (this.id + ' fetchOrders() does not support ' + marketType + ' markets yet');
-        }
         const contract = (marketType === 'swap') || (marketType === 'future');
         if (contract && (symbol === undefined)) {
             throw new ArgumentsRequired (this.id + ' fetchOrders() requires a symbol argument for ' + marketType + ' orders');
         }
-        return await this[method] (symbol, since, limit, params);
+        let response = undefined;
+        if (contract) {
+            response = await this.fetchContractOrders (symbol, since, limit, params);
+        } else {
+            response = await this.fetchSpotOrders (symbol, since, limit, params);
+        }
+        return response;
     }
 
     async fetchClosedOrders (symbol: string = undefined, since: Int = undefined, limit: Int = undefined, params = {}) {
@@ -3842,15 +3841,13 @@ export default class huobi extends Exchange {
         }
         let marketType = undefined;
         [ marketType, params ] = this.handleMarketTypeAndParams ('fetchClosedOrders', market, params);
-        const method = this.getSupportedMapping (marketType, {
-            'spot': 'fetchClosedSpotOrders',
-            'swap': 'fetchClosedContractOrders',
-            'future': 'fetchClosedContractOrders',
-        });
-        if (method === undefined) {
-            throw new NotSupported (this.id + ' fetchClosedOrders() does not support ' + marketType + ' markets yet');
+        let response = undefined;
+        if (marketType === 'spot') {
+            response = await this.fetchClosedSpotOrders (symbol, since, limit, params);
+        } else {
+            response = await this.fetchClosedContractOrders (symbol, since, limit, params);
         }
-        return await this[method] (symbol, since, limit, params);
+        return response;
     }
 
     async fetchOpenOrders (symbol: string = undefined, since: Int = undefined, limit: Int = undefined, params = {}) {
@@ -4537,15 +4534,13 @@ export default class huobi extends Exchange {
         await this.loadMarkets ();
         const market = this.market (symbol);
         const [ marketType, query ] = this.handleMarketTypeAndParams ('createOrder', market, params);
-        const method = this.getSupportedMapping (marketType, {
-            'spot': 'createSpotOrder',
-            'swap': 'createContractOrder',
-            'future': 'createContractOrder',
-        });
-        if (method === undefined) {
-            throw new NotSupported (this.id + ' createOrder() does not support ' + marketType + ' markets yet');
+        let response = undefined;
+        if (marketType === 'spot') {
+            response = await this.createSpotOrder (symbol, type, side, amount, price, query);
+        } else {
+            response = await this.createContractOrder (symbol, type, side, amount, price, query);
         }
-        return await this[method] (symbol, type, side, amount, price, query);
+        return response;
     }
 
     async createSpotOrder (symbol: string, type, side, amount, price = undefined, params = {}) {
@@ -7324,10 +7319,7 @@ export default class huobi extends Exchange {
             '1d': '1day',
         };
         const market = this.market (symbol);
-        const amountType = this.safeNumber2 (params, 'amount_type', 'amountType');
-        if (amountType === undefined) {
-            throw new ArgumentsRequired (this.id + ' fetchOpenInterestHistory requires parameter params.amountType to be either 1 (cont), or 2 (cryptocurrency)');
-        }
+        const amountType = this.safeInteger2 (params, 'amount_type', 'amountType', 2);
         const request = {
             'period': timeframes[timeframe],
             'amount_type': amountType,

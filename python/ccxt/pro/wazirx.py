@@ -49,7 +49,7 @@ class wazirx(ccxt.async_support.wazirx):
 
     async def watch_balance(self, params={}):
         """
-        query for balance and get the amount of funds available for trading or funds locked in orders
+        watch balance and get the amount of funds available for trading or funds locked in orders
         see https://docs.wazirx.com/#account-update
         :param dict [params]: extra parameters specific to the wazirx api endpoint
         :returns dict: a `balance structure <https://docs.ccxt.com/en/latest/manual.html?#balance-structure>`
@@ -565,7 +565,8 @@ class wazirx(ccxt.async_support.wazirx):
         if self.orders is None:
             limit = self.safe_integer(self.options, 'ordersLimit', 1000)
             self.orders = ArrayCacheBySymbolById(limit)
-        self.orders.append(parsedOrder)
+        orders = self.orders
+        orders.append(parsedOrder)
         messageHash = 'orders'
         client.resolve(self.orders, messageHash)
         messageHash += ':' + parsedOrder['symbol']

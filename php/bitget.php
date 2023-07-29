@@ -178,8 +178,6 @@ class bitget extends Exchange {
                             'cross/public/tierData' => 2, // 10 times/1s (IP) => 20/10 = 2
                             'isolated/public/tierData' => 2, // 10 times/1s (IP) => 20/10 = 2
                             'public/currencies' => 1, // 20 times/1s (IP) => 20/20 = 1
-                            'cross/account/assets' => 2, // 10 times/1s (IP) => 20/10 = 2
-                            'isolated/account/assets' => 2, // 10 times/1s (IP) => 20/10 = 2
                         ),
                     ),
                 ),
@@ -193,6 +191,8 @@ class bitget extends Exchange {
                             'account/assets' => 2,
                             'account/assets-lite' => 2, // 10 times/1s (UID) => 20/10 = 2
                             'account/transferRecords' => 1, // 20 times/1s (UID) => 20/20 = 1
+                            'convert/currencies' => 2,
+                            'convert/convert-record' => 2,
                         ),
                         'post' => array(
                             'wallet/transfer' => 4,
@@ -240,6 +240,8 @@ class bitget extends Exchange {
                             'trace/profit/profitHisDetailList' => 2, // 10 times/1s (UID) => 20/10 = 2
                             'trace/profit/waitProfitDetailList' => 2, // 10 times/1s (UID) => 20/10 = 2
                             'trace/user/getTraderInfo' => 2, // 10 times/1s (UID) => 20/10 = 2
+                            'convert/quoted-price' => 4,
+                            'convert/trade' => 4,
                         ),
                     ),
                     'mix' => array(
@@ -386,6 +388,8 @@ class bitget extends Exchange {
                             'cross/interest/list' => 2, // 10 times/1s (UID) => 20/10 = 2
                             'cross/liquidation/list' => 2, // 10 times/1s (UID) => 20/10 = 2
                             'cross/fin/list' => 2, // 10 times/1s (UID) => 20/10 = 2
+                            'cross/account/assets' => 2, // 10 times/1s (IP) => 20/10 = 2
+                            'isolated/account/assets' => 2, // 10 times/1s (IP) => 20/10 = 2
                         ),
                         'post' => array(
                             'cross/account/borrow' => 2, // 10 times/1s (UID) => 20/10 = 2
@@ -979,6 +983,14 @@ class bitget extends Exchange {
                 'withdraw' => array(
                     'fillResponseFromRequest' => true,
                 ),
+                'fetchOHLCV' => array(
+                    'spot' => array(
+                        'method' => 'publicSpotGetMarketCandles', // or publicSpotGetMarketHistoryCandles
+                    ),
+                    'swap:' => array(
+                        'method' => 'publicMixGetMarketCandles', // or publicMixGetMarketHistoryCandles or publicMixGetMarketHistoryIndexCandles or publicMixGetMarketHistoryMarkCandles
+                    ),
+                ),
                 'accountsByType' => array(
                     'main' => 'EXCHANGE',
                     'spot' => 'EXCHANGE',
@@ -1343,30 +1355,51 @@ class bitget extends Exchange {
             $code = $this->safe_currency_code($this->safe_string($entry, 'coinName'));
             $chains = $this->safe_value($entry, 'chains', array());
             $networks = array();
+            $deposit = false;
+            $withdraw = false;
+            $minWithdrawString = null;
+            $minDepositString = null;
+            $minWithdrawFeeString = null;
             for ($j = 0; $j < count($chains); $j++) {
                 $chain = $chains[$j];
                 $networkId = $this->safe_string($chain, 'chain');
                 $network = $this->safe_currency_code($networkId);
                 $withdrawEnabled = $this->safe_string($chain, 'withdrawable');
+                $canWithdraw = $withdrawEnabled === 'true';
+                $withdraw = ($canWithdraw) ? $canWithdraw : $withdraw;
                 $depositEnabled = $this->safe_string($chain, 'rechargeable');
+                $canDeposit = $depositEnabled === 'true';
+                $deposit = ($canDeposit) ? $canDeposit : $deposit;
+                $networkWithdrawFeeString = $this->safe_string($chain, 'withdrawFee');
+                if ($networkWithdrawFeeString !== null) {
+                    $minWithdrawFeeString = ($minWithdrawFeeString === null) ? $networkWithdrawFeeString : Precise::string_min($networkWithdrawFeeString, $minWithdrawFeeString);
+                }
+                $networkMinWithdrawString = $this->safe_string($chain, 'minWithdrawAmount');
+                if ($networkMinWithdrawString !== null) {
+                    $minWithdrawString = ($minWithdrawString === null) ? $networkMinWithdrawString : Precise::string_min($networkMinWithdrawString, $minWithdrawString);
+                }
+                $networkMinDepositString = $this->safe_string($chain, 'minDepositAmount');
+                if ($networkMinDepositString !== null) {
+                    $minDepositString = ($minDepositString === null) ? $networkMinDepositString : Precise::string_min($networkMinDepositString, $minDepositString);
+                }
                 $networks[$network] = array(
                     'info' => $chain,
                     'id' => $networkId,
                     'network' => $network,
                     'limits' => array(
                         'withdraw' => array(
-                            'min' => $this->safe_number($chain, 'minWithdrawAmount'),
+                            'min' => $this->parse_number($networkMinWithdrawString),
                             'max' => null,
                         ),
                         'deposit' => array(
-                            'min' => $this->safe_number($chain, 'minDepositAmount'),
+                            'min' => $this->parse_number($networkMinDepositString),
                             'max' => null,
                         ),
                     ),
-                    'active' => null,
-                    'withdraw' => $withdrawEnabled === 'true',
-                    'deposit' => $depositEnabled === 'true',
-                    'fee' => $this->safe_number($chain, 'withdrawFee'),
+                    'active' => $canWithdraw && $canDeposit,
+                    'withdraw' => $canWithdraw,
+                    'deposit' => $canDeposit,
+                    'fee' => $this->parse_number($networkWithdrawFeeString),
                     'precision' => null,
                 );
             }
@@ -1377,14 +1410,24 @@ class bitget extends Exchange {
                 'networks' => $networks,
                 'type' => null,
                 'name' => null,
-                'active' => null,
-                'deposit' => null,
-                'withdraw' => null,
-                'fee' => null,
+                'active' => $deposit && $withdraw,
+                'deposit' => $deposit,
+                'withdraw' => $withdraw,
+                'fee' => $this->parse_number($minWithdrawFeeString),
                 'precision' => null,
                 'limits' => array(
-                    'amount' => array( 'min' => null, 'max' => null ),
-                    'withdraw' => array( 'min' => null, 'max' => null ),
+                    'amount' => array(
+                        'min' => null,
+                        'max' => null,
+                    ),
+                    'withdraw' => array(
+                        'min' => $this->parse_number($minWithdrawString),
+                        'max' => null,
+                    ),
+                    'deposit' => array(
+                        'min' => $this->parse_number($minDepositString),
+                        'max' => null,
+                    ),
                 ),
             );
         }
@@ -2366,13 +2409,32 @@ class bitget extends Exchange {
                 }
             }
         }
+        $options = $this->safe_value($this->options, 'fetchOHLCV', array());
         $ommitted = $this->omit($params, array( 'until', 'till' ));
         $extended = array_merge($request, $ommitted);
         $response = null;
         if ($market['spot']) {
-            $response = $this->publicSpotGetMarketCandles ($extended);
+            $spotOptions = $this->safe_value($options, 'spot', array());
+            $defaultSpotMethod = $this->safe_string($params, 'method', 'publicSpotGetMarketCandles');
+            $method = $this->safe_string($spotOptions, 'method', $defaultSpotMethod);
+            if ($method === 'publicSpotGetMarketCandles') {
+                $response = $this->publicSpotGetMarketCandles ($extended);
+            } elseif ($method === 'publicSpotGetMarketHistoryCandles') {
+                $response = $this->publicSpotGetMarketHistoryCandles ($extended);
+            }
         } else {
-            $response = $this->publicMixGetMarketCandles ($extended);
+            $swapOptions = $this->safe_value($options, 'swap', array());
+            $defaultSwapMethod = $this->safe_string($params, 'method', 'publicMixGetMarketCandles');
+            $swapMethod = $this->safe_string($swapOptions, 'method', $defaultSwapMethod);
+            if ($swapMethod === 'publicMixGetMarketCandles') {
+                $response = $this->publicMixGetMarketCandles ($extended);
+            } elseif ($swapMethod === 'publicMixGetMarketHistoryCandles') {
+                $response = $this->publicMixGetMarketHistoryCandles ($extended);
+            } elseif ($swapMethod === 'publicMixGetMarketHistoryIndexCandles') {
+                $response = $this->publicMixGetMarketHistoryIndexCandles ($extended);
+            } elseif ($swapMethod === 'publicMixGetMarketHistoryMarkCandles') {
+                $response = $this->publicMixGetMarketHistoryMarkCandles ($extended);
+            }
         }
         //  [ ["1645911960000","39406","39407","39374.5","39379","35.526","1399132.341"] ]
         $data = $this->safe_value($response, 'data', $response);
@@ -2793,7 +2855,7 @@ class bitget extends Exchange {
                 $request[$timeInForceKey] = 'ioc';
             }
         }
-        $omitted = $this->omit($query, array( 'stopPrice', 'triggerType', 'stopLossPrice', 'takeProfitPrice', 'stopLoss', 'takeProfit', 'postOnly' ));
+        $omitted = $this->omit($query, array( 'stopPrice', 'triggerType', 'stopLossPrice', 'takeProfitPrice', 'stopLoss', 'takeProfit', 'postOnly', 'reduceOnly' ));
         $response = $this->$method (array_merge($request, $omitted));
         //
         //     {
@@ -3733,10 +3795,10 @@ class bitget extends Exchange {
 
     public function fetch_position(string $symbol, $params = array ()) {
         /**
-         * fetch $data on a single open contract trade position
-         * @param {string} $symbol unified $market $symbol of the $market the position is held in, default is null
+         * fetch $data on a single open contract trade $position
+         * @param {string} $symbol unified $market $symbol of the $market the $position is held in, default is null
          * @param {array} [$params] extra parameters specific to the bitget api endpoint
-         * @return {array} a ~@link https://docs.ccxt.com/#/?id=position-structure position structure~
+         * @return {array} a ~@link https://docs.ccxt.com/#/?id=$position-structure $position structure~
          */
         $this->load_markets();
         $market = $this->market($symbol);
@@ -3774,7 +3836,9 @@ class bitget extends Exchange {
         //     }
         //
         $data = $this->safe_value($response, 'data', array());
-        return $this->parse_positions($data);
+        $first = $this->safe_value($data, 0, array());
+        $position = $this->parse_position($first, $market);
+        return $position;
     }
 
     public function fetch_positions(?array $symbols = null, $params = array ()) {

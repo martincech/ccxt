@@ -617,6 +617,7 @@ class huobi(Exchange, ImplicitAPI):
                             # Swap Account Interface
                             'linear-swap-api/v1/swap_api_trading_status': 1,
                             'linear-swap-api/v3/unified_account_info': 1,
+                            'linear-swap-api/v3/fix_position_margin_change_record': 1,
                             'linear-swap-api/v3/swap_unified_account_type': 1,
                         },
                         'post': {
@@ -810,6 +811,7 @@ class huobi(Exchange, ImplicitAPI):
                             'linear-swap-api/v3/swap_cross_hisorders': 1,
                             'linear-swap-api/v3/swap_hisorders_exact': 1,
                             'linear-swap-api/v3/swap_cross_hisorders_exact': 1,
+                            'linear-swap-api/v3/fix_position_margin_change': 1,
                             'linear-swap-api/v3/swap_switch_account_type': 1,
                             # Swap Strategy Order Interface
                             'linear-swap-api/v1/swap_trigger_order': 1,
@@ -861,6 +863,7 @@ class huobi(Exchange, ImplicitAPI):
                 'broad': {
                     'contract is restricted of closing positions on API.  Please contact customer service': OnMaintenance,
                     'maintain': OnMaintenance,
+                    'API key has no permission': PermissionDenied,  # {"status":"error","err-code":"api-signature-not-valid","err-msg":"Signature not valid: API key has no permission [API Key没有权限]","data":null}
                 },
                 'exact': {
                     # err-code
@@ -2253,12 +2256,9 @@ class huobi(Exchange, ImplicitAPI):
             market = self.market(symbol)
         marketType = None
         marketType, params = self.handle_market_type_and_params('fetchOrderTrades', market, params)
-        method = self.get_supported_mapping(marketType, {
-            'spot': 'fetchSpotOrderTrades',
-            # 'swap': 'fetchContractOrderTrades',
-            # 'future': 'fetchContractOrderTrades',
-        })
-        return getattr(self, method)(id, symbol, since, limit, params)
+        if marketType != 'spot':
+            raise NotSupported(self.id + ' fetchOrderTrades() is only supported for spot markets')
+        return self.fetch_spot_order_trades(id, symbol, since, limit, params)
 
     def fetch_spot_order_trades(self, id: str, symbol: Optional[str] = None, since: Optional[int] = None, limit: Optional[int] = None, params={}):
         self.load_markets()
@@ -3616,17 +3616,15 @@ class huobi(Exchange, ImplicitAPI):
             market = self.market(symbol)
         marketType = None
         marketType, params = self.handle_market_type_and_params('fetchOrders', market, params)
-        method = self.get_supported_mapping(marketType, {
-            'spot': 'fetchSpotOrders',
-            'swap': 'fetchContractOrders',
-            'future': 'fetchContractOrders',
-        })
-        if method is None:
-            raise NotSupported(self.id + ' fetchOrders() does not support ' + marketType + ' markets yet')
         contract = (marketType == 'swap') or (marketType == 'future')
         if contract and (symbol is None):
             raise ArgumentsRequired(self.id + ' fetchOrders() requires a symbol argument for ' + marketType + ' orders')
-        return getattr(self, method)(symbol, since, limit, params)
+        response = None
+        if contract:
+            response = self.fetch_contract_orders(symbol, since, limit, params)
+        else:
+            response = self.fetch_spot_orders(symbol, since, limit, params)
+        return response
 
     def fetch_closed_orders(self, symbol: Optional[str] = None, since: Optional[int] = None, limit: Optional[int] = None, params={}):
         """
@@ -3643,14 +3641,12 @@ class huobi(Exchange, ImplicitAPI):
             market = self.market(symbol)
         marketType = None
         marketType, params = self.handle_market_type_and_params('fetchClosedOrders', market, params)
-        method = self.get_supported_mapping(marketType, {
-            'spot': 'fetchClosedSpotOrders',
-            'swap': 'fetchClosedContractOrders',
-            'future': 'fetchClosedContractOrders',
-        })
-        if method is None:
-            raise NotSupported(self.id + ' fetchClosedOrders() does not support ' + marketType + ' markets yet')
-        return getattr(self, method)(symbol, since, limit, params)
+        response = None
+        if marketType == 'spot':
+            response = self.fetch_closed_spot_orders(symbol, since, limit, params)
+        else:
+            response = self.fetch_closed_contract_orders(symbol, since, limit, params)
+        return response
 
     def fetch_open_orders(self, symbol: Optional[str] = None, since: Optional[int] = None, limit: Optional[int] = None, params={}):
         """
@@ -4307,14 +4303,12 @@ class huobi(Exchange, ImplicitAPI):
         self.load_markets()
         market = self.market(symbol)
         marketType, query = self.handle_market_type_and_params('createOrder', market, params)
-        method = self.get_supported_mapping(marketType, {
-            'spot': 'createSpotOrder',
-            'swap': 'createContractOrder',
-            'future': 'createContractOrder',
-        })
-        if method is None:
-            raise NotSupported(self.id + ' createOrder() does not support ' + marketType + ' markets yet')
-        return getattr(self, method)(symbol, type, side, amount, price, query)
+        response = None
+        if marketType == 'spot':
+            response = self.create_spot_order(symbol, type, side, amount, price, query)
+        else:
+            response = self.create_contract_order(symbol, type, side, amount, price, query)
+        return response
 
     def create_spot_order(self, symbol: str, type, side, amount, price=None, params={}):
         """
@@ -6855,9 +6849,7 @@ class huobi(Exchange, ImplicitAPI):
             '1d': '1day',
         }
         market = self.market(symbol)
-        amountType = self.safe_number_2(params, 'amount_type', 'amountType')
-        if amountType is None:
-            raise ArgumentsRequired(self.id + ' fetchOpenInterestHistory requires parameter params.amountType to be either 1(cont), or 2(cryptocurrency)')
+        amountType = self.safe_integer_2(params, 'amount_type', 'amountType', 2)
         request = {
             'period': timeframes[timeframe],
             'amount_type': amountType,

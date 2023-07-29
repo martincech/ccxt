@@ -205,8 +205,6 @@ class bitget(Exchange, ImplicitAPI):
                             'cross/public/tierData': 2,  # 10 times/1s(IP) => 20/10 = 2
                             'isolated/public/tierData': 2,  # 10 times/1s(IP) => 20/10 = 2
                             'public/currencies': 1,  # 20 times/1s(IP) => 20/20 = 1
-                            'cross/account/assets': 2,  # 10 times/1s(IP) => 20/10 = 2
-                            'isolated/account/assets': 2,  # 10 times/1s(IP) => 20/10 = 2
                         },
                     },
                 },
@@ -220,6 +218,8 @@ class bitget(Exchange, ImplicitAPI):
                             'account/assets': 2,
                             'account/assets-lite': 2,  # 10 times/1s(UID) => 20/10 = 2
                             'account/transferRecords': 1,  # 20 times/1s(UID) => 20/20 = 1
+                            'convert/currencies': 2,
+                            'convert/convert-record': 2,
                         },
                         'post': {
                             'wallet/transfer': 4,
@@ -267,6 +267,8 @@ class bitget(Exchange, ImplicitAPI):
                             'trace/profit/profitHisDetailList': 2,  # 10 times/1s(UID) => 20/10 = 2
                             'trace/profit/waitProfitDetailList': 2,  # 10 times/1s(UID) => 20/10 = 2
                             'trace/user/getTraderInfo': 2,  # 10 times/1s(UID) => 20/10 = 2
+                            'convert/quoted-price': 4,
+                            'convert/trade': 4,
                         },
                     },
                     'mix': {
@@ -413,6 +415,8 @@ class bitget(Exchange, ImplicitAPI):
                             'cross/interest/list': 2,  # 10 times/1s(UID) => 20/10 = 2
                             'cross/liquidation/list': 2,  # 10 times/1s(UID) => 20/10 = 2
                             'cross/fin/list': 2,  # 10 times/1s(UID) => 20/10 = 2
+                            'cross/account/assets': 2,  # 10 times/1s(IP) => 20/10 = 2
+                            'isolated/account/assets': 2,  # 10 times/1s(IP) => 20/10 = 2
                         },
                         'post': {
                             'cross/account/borrow': 2,  # 10 times/1s(UID) => 20/10 = 2
@@ -1006,6 +1010,14 @@ class bitget(Exchange, ImplicitAPI):
                 'withdraw': {
                     'fillResponseFromRequest': True,
                 },
+                'fetchOHLCV': {
+                    'spot': {
+                        'method': 'publicSpotGetMarketCandles',  # or publicSpotGetMarketHistoryCandles
+                    },
+                    'swap:': {
+                        'method': 'publicMixGetMarketCandles',  # or publicMixGetMarketHistoryCandles or publicMixGetMarketHistoryIndexCandles or publicMixGetMarketHistoryMarkCandles
+                    },
+                },
                 'accountsByType': {
                     'main': 'EXCHANGE',
                     'spot': 'EXCHANGE',
@@ -1352,30 +1364,48 @@ class bitget(Exchange, ImplicitAPI):
             code = self.safe_currency_code(self.safe_string(entry, 'coinName'))
             chains = self.safe_value(entry, 'chains', [])
             networks = {}
+            deposit = False
+            withdraw = False
+            minWithdrawString = None
+            minDepositString = None
+            minWithdrawFeeString = None
             for j in range(0, len(chains)):
                 chain = chains[j]
                 networkId = self.safe_string(chain, 'chain')
                 network = self.safe_currency_code(networkId)
                 withdrawEnabled = self.safe_string(chain, 'withdrawable')
+                canWithdraw = withdrawEnabled == 'true'
+                withdraw = canWithdraw if (canWithdraw) else withdraw
                 depositEnabled = self.safe_string(chain, 'rechargeable')
+                canDeposit = depositEnabled == 'true'
+                deposit = canDeposit if (canDeposit) else deposit
+                networkWithdrawFeeString = self.safe_string(chain, 'withdrawFee')
+                if networkWithdrawFeeString is not None:
+                    minWithdrawFeeString = networkWithdrawFeeString if (minWithdrawFeeString is None) else Precise.string_min(networkWithdrawFeeString, minWithdrawFeeString)
+                networkMinWithdrawString = self.safe_string(chain, 'minWithdrawAmount')
+                if networkMinWithdrawString is not None:
+                    minWithdrawString = networkMinWithdrawString if (minWithdrawString is None) else Precise.string_min(networkMinWithdrawString, minWithdrawString)
+                networkMinDepositString = self.safe_string(chain, 'minDepositAmount')
+                if networkMinDepositString is not None:
+                    minDepositString = networkMinDepositString if (minDepositString is None) else Precise.string_min(networkMinDepositString, minDepositString)
                 networks[network] = {
                     'info': chain,
                     'id': networkId,
                     'network': network,
                     'limits': {
                         'withdraw': {
-                            'min': self.safe_number(chain, 'minWithdrawAmount'),
+                            'min': self.parse_number(networkMinWithdrawString),
                             'max': None,
                         },
                         'deposit': {
-                            'min': self.safe_number(chain, 'minDepositAmount'),
+                            'min': self.parse_number(networkMinDepositString),
                             'max': None,
                         },
                     },
-                    'active': None,
-                    'withdraw': withdrawEnabled == 'true',
-                    'deposit': depositEnabled == 'true',
-                    'fee': self.safe_number(chain, 'withdrawFee'),
+                    'active': canWithdraw and canDeposit,
+                    'withdraw': canWithdraw,
+                    'deposit': canDeposit,
+                    'fee': self.parse_number(networkWithdrawFeeString),
                     'precision': None,
                 }
             result[code] = {
@@ -1385,14 +1415,24 @@ class bitget(Exchange, ImplicitAPI):
                 'networks': networks,
                 'type': None,
                 'name': None,
-                'active': None,
-                'deposit': None,
-                'withdraw': None,
-                'fee': None,
+                'active': deposit and withdraw,
+                'deposit': deposit,
+                'withdraw': withdraw,
+                'fee': self.parse_number(minWithdrawFeeString),
                 'precision': None,
                 'limits': {
-                    'amount': {'min': None, 'max': None},
-                    'withdraw': {'min': None, 'max': None},
+                    'amount': {
+                        'min': None,
+                        'max': None,
+                    },
+                    'withdraw': {
+                        'min': self.parse_number(minWithdrawString),
+                        'max': None,
+                    },
+                    'deposit': {
+                        'min': self.parse_number(minDepositString),
+                        'max': None,
+                    },
                 },
             }
         return result
@@ -2321,13 +2361,30 @@ class bitget(Exchange, ImplicitAPI):
                     request['endTime'] = until
                 else:
                     request['endTime'] = self.sum(since, limit * duration * 1000)
+        options = self.safe_value(self.options, 'fetchOHLCV', {})
         ommitted = self.omit(params, ['until', 'till'])
         extended = self.extend(request, ommitted)
         response = None
         if market['spot']:
-            response = await self.publicSpotGetMarketCandles(extended)
+            spotOptions = self.safe_value(options, 'spot', {})
+            defaultSpotMethod = self.safe_string(params, 'method', 'publicSpotGetMarketCandles')
+            method = self.safe_string(spotOptions, 'method', defaultSpotMethod)
+            if method == 'publicSpotGetMarketCandles':
+                response = await self.publicSpotGetMarketCandles(extended)
+            elif method == 'publicSpotGetMarketHistoryCandles':
+                response = await self.publicSpotGetMarketHistoryCandles(extended)
         else:
-            response = await self.publicMixGetMarketCandles(extended)
+            swapOptions = self.safe_value(options, 'swap', {})
+            defaultSwapMethod = self.safe_string(params, 'method', 'publicMixGetMarketCandles')
+            swapMethod = self.safe_string(swapOptions, 'method', defaultSwapMethod)
+            if swapMethod == 'publicMixGetMarketCandles':
+                response = await self.publicMixGetMarketCandles(extended)
+            elif swapMethod == 'publicMixGetMarketHistoryCandles':
+                response = await self.publicMixGetMarketHistoryCandles(extended)
+            elif swapMethod == 'publicMixGetMarketHistoryIndexCandles':
+                response = await self.publicMixGetMarketHistoryIndexCandles(extended)
+            elif swapMethod == 'publicMixGetMarketHistoryMarkCandles':
+                response = await self.publicMixGetMarketHistoryMarkCandles(extended)
         #  [["1645911960000","39406","39407","39374.5","39379","35.526","1399132.341"]]
         data = self.safe_value(response, 'data', response)
         return self.parse_ohlcvs(data, market, timeframe, since, limit)
@@ -2712,7 +2769,7 @@ class bitget(Exchange, ImplicitAPI):
                 request[timeInForceKey] = 'fok'
             elif timeInForce == 'ioc':
                 request[timeInForceKey] = 'ioc'
-        omitted = self.omit(query, ['stopPrice', 'triggerType', 'stopLossPrice', 'takeProfitPrice', 'stopLoss', 'takeProfit', 'postOnly'])
+        omitted = self.omit(query, ['stopPrice', 'triggerType', 'stopLossPrice', 'takeProfitPrice', 'stopLoss', 'takeProfit', 'postOnly', 'reduceOnly'])
         response = await getattr(self, method)(self.extend(request, omitted))
         #
         #     {
@@ -3634,7 +3691,9 @@ class bitget(Exchange, ImplicitAPI):
         #     }
         #
         data = self.safe_value(response, 'data', [])
-        return self.parse_positions(data)
+        first = self.safe_value(data, 0, {})
+        position = self.parse_position(first, market)
+        return position
 
     async def fetch_positions(self, symbols: Optional[List[str]] = None, params={}):
         """
