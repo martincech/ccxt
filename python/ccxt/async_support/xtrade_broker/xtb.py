@@ -5,7 +5,7 @@ import os
 from datetime import datetime
 from typing import Optional, List
 
-from ccxt import NotSupported, TICK_SIZE, DECIMAL_PLACES
+from ccxt import NotSupported, DECIMAL_PLACES
 from ccxt.async_support import Exchange
 from ccxt.async_support.xtrade_broker.apiclient import APIClient
 from ccxt.async_support.xtrade_broker.xtb_constants import order_type, order_side, taker_maker, OrderType
@@ -86,9 +86,9 @@ class xtb(Exchange):
 
                 'fetchOrder': True,
                 'fetchOrders': True,
-                'fetchClosedOrder': True,
                 'fetchOrderBook': True,
                 'fetchBidsAsks': True,
+                'fetchTickers': True,
 
                 'fetchFundingRate': 'emulated',
                 'fetchFundingRateHistory': 'emulated',
@@ -98,11 +98,12 @@ class xtb(Exchange):
                 'fetchTrades': True,
                 'fetchPosition': True,
                 'fetchPositions': True,
-                'fetchMyTrades': True,
                 'fetchTime': True,
 
                 'cancelOrder': True,
                 'createOrder': True,
+                'createLimitOrder': True,
+                'createMarketOrder': True,
             },
             'timeframes': {
                 '1m': 1,
@@ -154,11 +155,7 @@ class xtb(Exchange):
 
     async def fetch_closed_orders(self, symbol: Optional[str] = None, since: Optional[int] = None,
                                   limit: Optional[int] = None, params=None):
-        raise NotSupported(self.id + ' fetchClosedOrders() is not supported yet')
-
-    async def fetch_closed_orders(self, symbol: Optional[str] = None, since: Optional[int] = None,
-                                  limit: Optional[int] = None, params=None):
-        raise NotSupported(self.id + ' fetchClosedOrders() is not supported yet')
+        raise await self._fetch_trades_history_impl(symbol, since, limit, params)
 
     async def fetch_order_book(self, symbol: str, limit: Optional[int] = None, params=None):
         raise NotSupported(self.id + ' fetchOrderBook() is not supported yet')
@@ -187,21 +184,20 @@ class xtb(Exchange):
         }]
 
     async def fetch_position(self, symbol: str, params={}):
-        raise NotSupported(self.id + ' fetchPosition() is not supported yet')
+        return self._fetch_positions_impl([symbol], params)
 
     async def fetch_positions(self, symbols: Optional[List[str]] = None, params={}):
-        raise NotSupported(self.id + ' fetchPositions() is not supported yet')
+        return await self._fetch_positions_impl(symbols, params)
 
     async def fetch_mark_ohlcv(self, symbol, timeframe='1m', since: Optional[int] = None, limit: Optional[int] = None,
                                params={}):
         return self.fetch_ohlcv(symbol, timeframe, since, limit, params)
 
     async def fetch_trades(self, symbol, since=None, limit=None, params=None):
-        return await self._fetch_trades_impl(symbol, since, limit, params)
+        return await self._fetch_orders_impl(symbol, since, limit, params)
 
-    async def fetch_my_trades(self, symbol: Optional[str] = None, since: Optional[int] = None,
-                              limit: Optional[int] = None, params=None):
-        return await self._fetch_trades_history_impl(symbol, since, limit, params)
+    async def fetch_tickers(self, symbols: Optional[List[str]] = None, params={}):
+        raise NotSupported(self.id + ' fetchTickers() is not supported yet')
 
     async def fetch_time(self, params=None):
         return await self._fetch_time_impl(params)
@@ -211,6 +207,14 @@ class xtb(Exchange):
 
     async def create_order(self, symbol: str, type: OrderType, side: OrderSide, amount, price=None, params=None):
         raise NotSupported(self.id + ' createOrder() is not supported yet')
+
+    @signed
+    async def _fetch_positions_impl(self, symbols: Optional[List[str]] = None, params={}, **kwargs):
+        client = kwargs.get('api_client')
+        trades = await client.getTrades()
+        if symbols:
+            trades = [trade for trade in trades if trade['symbol'] in symbols]
+        return self.parse_positions(trades, symbols, params)
 
     @signed
     async def _fetch_balance_impl(self, params=None, **kwargs):
@@ -235,7 +239,7 @@ class xtb(Exchange):
     @signed
     async def _fetch_markets_impl(self, params=None, **kwargs):
         client = kwargs.get('api_client')
-        symbols = [await client.getSymbol(s) for s in ["NATGAS", "US500", "01C.PL"]]
+        symbols = [await client.getSymbol(s) for s in ["EURUSD", "NATGAS", "US500"]]
         # symbols = await client.getAllSymbols()
         return [
             self._parse_market_info(symbol) for symbol in symbols
@@ -243,26 +247,25 @@ class xtb(Exchange):
         ]
 
     @signed
-    async def _fetch_trades_impl(self, symbol, since=None, limit=None, params=None, **kwargs):
-        client = kwargs.get('api_client')
-        trades = await client.getTrades()
-        return self.parse_trades(trades, self.market(symbol), since, limit, params)
-
-    @signed
     async def _fetch_trades_history_impl(self, symbol, since=None, limit=None, params=None, **kwargs):
         client = kwargs.get('api_client')
-        trades = await client.getTradesHistory()
+        trades = await client.getTradesHistory(since=since)
         return self.parse_trades(trades, self.market(symbol), since, limit, params)
 
     @signed
     async def _fetch_orders_impl(self, symbol=None, since=None, limit=None, params=None, **kwargs):
-        return await self.fetch_trades(symbol, since, limit, params)
+        client = kwargs.get('api_client')
+        if since is None:
+            trades = await client.getTrades()
+        else:
+            trades = await client.getTradesHistory(since)
+        return self.parse_orders(trades, self.market(symbol), params)
 
     @signed
     async def _fetch_order_impl(self, id, symbol=None, params=None, **kwargs):
         client = kwargs.get('api_client')
         trades = await client.getTradeRecords(order_id=id)
-        return self.parse_trades(trades, self.market(symbol), since=None, limit=None, params=params)
+        return self.parse_orders(trades, self.market(symbol), params)
 
     @signed
     async def _fetch_ohlcv_impl(self, symbol, timeframe='1m', since=None, limit=None, params=None, **kwargs):
@@ -287,13 +290,14 @@ class xtb(Exchange):
     def _parse_market_info(self, market: dict):
         expiration_ts = self.safe_string(market, 'expiration')
         margin = self.safe_integer(market, 'marginMode', 104) in [101, 102, 103]
-        swap = bool(self.safe_float(market, 'swapLong', 0) or self.safe_float(market, 'swapShort', 0))
-        future = "futures" in self.safe_string(market, 'description')
+        # swap = bool(self.safe_float(market, 'swapLong', 0) or self.safe_float(market, 'swapShort', 0))
+        swap = False
         spot = False
+        future = "futures" in self.safe_string(market, 'description')
         if future:
             typ = 'future'
-        elif swap:
-            typ = 'swap'
+        # elif swap:
+        #     typ = 'swap'
         else:
             typ = 'spot'
             spot = True
@@ -373,23 +377,91 @@ class xtb(Exchange):
 
     def parse_trade(self, trade, market=None):
         order_id = self.safe_string(trade, 'order')
+        order2_id = self.safe_string(trade, 'order2')
         trade_id = self.safe_string(trade, 'position')
         timestamp = self.safe_integer(trade, 'open_time')
-        price = self.safe_float(trade, 'open_price')
-        amount = self.safe_string(trade, 'volume')
         symbol = trade['symbol']
+        price = float(self.price_to_precision(symbol, self.safe_float(trade, 'open_price')))
+        amount = float(self.amount_to_precision(symbol, self.safe_string(trade, 'volume')))
+        isopen = order_id == trade_id and order_id != order2_id
+        isclosed = order_id != order2_id and order2_id != trade_id and order_id != trade_id
+        iswaiting = order_id == order2_id and order2_id == trade_id
+        if iswaiting:
+            status = 'open'
+        else:
+            status = 'closed'
+
         return self.safe_trade({
             'info': trade,
             'id': trade_id,
-            'order': order_id,
+            'clientOrderId': None,
             'timestamp': timestamp,
+            'lastTradeTimestamp': timestamp,
             'datetime': self.iso8601(timestamp),
+            'timeInForce': 'FOK',
             'symbol': symbol,
+            'status': status,
+            'order': order_id,
             'type': order_type(self.safe_integer(trade, 'cmd')),
             'side': order_side(self.safe_integer(trade, 'cmd')),
             'takerOrMaker': taker_maker(self.safe_integer(trade, 'cmd')),
-            'price': self.price_to_precision(symbol, price),
-            'amount': self.amount_to_precision(symbol, amount),
-            'cost': None,
-            'fee': None,
+            'price': price,
+            'average': price,
+            'amount': amount,
+            'filled': amount,
+            'remaining': 0.0,
+            'cost': price * amount,
+            'fee': {
+                'cost': self.safe_float(trade, 'commission'),
+                'currency': self.market(symbol)['base'],
+                'rate': 0.0
+            },
+            'fees': None
         }, market)
+
+    def parse_position(self, position, market=None):
+        trade_id = self.safe_string(position, 'position')
+        timestamp = self.safe_integer(position, 'open_time')
+        symbol = position['symbol']
+        price = self.price_to_precision(symbol, self.safe_float(position, 'open_price'))
+        amount = self.amount_to_precision(symbol, self.safe_string(position, 'volume'))
+        unrealizedPnl = None    # float, the difference between the market price and the entry price times the number of contracts, can be negative
+        initialMargin = None    # float, the amount of collateral that is locked up in this position
+        liquidationPrice = None # float, the price at which collateral becomes less than maintenanceMargin
+        notional = None         # float, the value of the position in the settlement currency
+        collateral = None  # float, the maximum amount of collateral that can be lost, affected by pnl
+        return {
+           'info': position,
+           'id': trade_id,
+           'symbol': symbol,
+           'timestamp': timestamp,
+           'datetime': self.iso8601(timestamp),
+           'isolated': True,
+           'hedged': False,
+           'side': order_side(self.safe_integer(position, 'cmd')),
+           'contracts': amount,
+           'contractSize': self.market(symbol)['contractSize'],
+           'entryPrice': price,
+           'markPrice': price,
+           'notional': notional,
+           'leverage': self.market(symbol)['limits']['leverage']['max'],
+           'collateral': collateral,
+           'initialMargin': initialMargin,
+           'maintenanceMargin': initialMargin,
+           'initialMarginPercentage': None,
+           'maintenanceMarginPercentage': None,
+           'unrealizedPnl': unrealizedPnl,
+           'liquidationPrice': liquidationPrice,
+           'marginMode': 'isolated',
+           'percentage': None #unrealizedPnl / initialMargin * 100
+        }
+
+    def parse_order(self, order, market=None):
+        trade = self.parse_trade(order, market)
+        trade['trades'] = [trade]
+        return trade
+
+
+
+
+

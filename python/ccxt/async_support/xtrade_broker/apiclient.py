@@ -36,7 +36,7 @@ class APIClient(JsonSocket):
                 return ret
         except Exception as e:
             self._logger.error(f"Error executing {commandName}: {e}")
-            return None
+            raise e
 
     @staticmethod
     def _raise_by_errorcode(errcode, description):
@@ -127,8 +127,8 @@ class APIClient(JsonSocket):
     async def getServerTime(self):
         return await self._command_execute('getServerTime')
 
-    async def getTrades(self):
-        return await self._command_execute('getTrades', {"openedOnly": True})
+    async def getTrades(self, opened_only=False):
+        return await self._command_execute('getTrades', {"openedOnly": opened_only})
 
     async def getTradeRecords(self, order_id):
         return await self._command_execute('getTradeRecords', {"orders": [

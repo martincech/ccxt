@@ -1,5 +1,5 @@
 import functools
-from typing import Optional
+from typing import Optional, List
 
 from ccxt import Exchange
 from ccxt.async_support.xtrade_broker.xtb import xtb as a_xtb
@@ -30,35 +30,31 @@ def force_sync(fn):
 class xtb(a_xtb):
     @force_sync
     def fetch_balance(self, params=None):
-        return self._fetch_balance_impl(params)
+        return super().fetch_balance(params)
 
     @force_sync
     def fetch_markets(self, params=None):
-        return self._fetch_markets_impl(params)
+        return super().fetch_markets(params)
 
     @force_sync
     def fetch_time(self, params=None):
-        return self._fetch_time_impl(params)
+        return super().fetch_time(params)
 
     @force_sync
     def fetch_trades(self, symbol, since=None, limit=None, params=None):
-        return self._fetch_trades_impl(symbol, since, limit, params)
-
-    @force_sync
-    def fetch_my_trades(self, symbol, since=None, limit=None, params=None):
-        return self._fetch_trades_history_impl(symbol, since, limit, params)
+        return super().fetch_trades(symbol, since, limit, params)
 
     @force_sync
     def fetch_orders(self, symbol=None, since=None, limit=None, params=None):
-        return self._fetch_orders_impl(symbol, since, limit, params)
+        return super().fetch_orders(symbol, since, limit, params)
 
     @force_sync
     def fetch_order(self, id, symbol=None, params=None):
-        return self._fetch_order_impl(id, symbol, params)
+        return super().fetch_order(id, symbol, params)
 
     @force_sync
     def fetch_ohlcv(self, symbol, timeframe='1m', since=None, limit=None, params=None):
-        return self._fetch_ohlcv_impl(symbol, timeframe, since, limit, params)
+        return super().fetch_ohlcv(symbol, timeframe, since, limit, params)
 
     @force_sync
     def load_markets(self, reload=False, params=None):
@@ -75,4 +71,12 @@ class xtb(a_xtb):
     @force_sync
     def fetch_funding_rate_history(self, symbol: Optional[str] = None, since: Optional[int] = None,
                                          limit: Optional[int] = None, params={}):
-        return super()._fetch_funding_rate_history(symbol, since, limit, params)
+        return super().fetch_funding_rate_history(symbol, since, limit, params)
+
+    @force_sync
+    def fetch_position(self, symbol: str, params={}):
+        return super().fetch_position(symbol, params)
+
+    @force_sync
+    def fetch_positions(self, symbols: Optional[List[str]] = None, params={}):
+        return super().fetch_positions(symbols, params)

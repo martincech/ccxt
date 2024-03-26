@@ -15,20 +15,33 @@ class OrderType(Enum):
 def order_type(t):
     if t < OrderType.BUY_LIMIT.value:
         return 'market'
-    else:
+    elif t < OrderType.BALANCE.value:
         return 'limit'
+    return None
 
 
 def order_side(t):
     if t == OrderType.BUY.value or t == OrderType.BUY_LIMIT.value or t == OrderType.BUY_STOP.value:
         return 'buy'
-    return 'sell'
+    elif t == OrderType.SELL.value or t == OrderType.SELL_LIMIT.value or t == OrderType.SELL_STOP.value:
+        return 'sell'
+    return None
+
+def position_side(t):
+    if t == OrderType.BUY.value or t == OrderType.BUY_LIMIT.value or t == OrderType.BUY_STOP.value:
+        return 'long'
+    elif t == OrderType.SELL.value or t == OrderType.SELL_LIMIT.value or t == OrderType.SELL_STOP.value:
+        return 'short'
+    return None
+
 
 
 def taker_maker(t):
     if t == OrderType.BUY.value or t == OrderType.BUY_LIMIT.value or t == OrderType.BUY_STOP.value:
         return 'taker'
-    return 'maker'
+    elif t == OrderType.SELL.value or t == OrderType.SELL_LIMIT.value or t == OrderType.SELL_STOP.value:
+        return 'maker'
+    return None
 
 
 class OrderStatus(Enum):
